@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { findCourse, listCourses, normalizeCourse } from '../src/blackboard/courses.js';
+import { findCourse, listCourses, moduleFolderName, normalizeCourse } from '../src/blackboard/courses.js';
 import { BlackboardError } from '../src/blackboard/errors.js';
 import { globalCache } from '../src/blackboard/cache.js';
 import { COURSES, ENROLLMENTS, FakeHttp, USER_ME } from './helpers/fake-http.js';
+import { paths } from '../src/storage/session-store.js';
 
 beforeEach(() => {
   globalCache.clear();
@@ -88,5 +89,35 @@ describe('listCourses', () => {
     const byCode = await findCourse(http, 'CIS.473.M001.FALL2026');
     expect(byCode.id).toBe('_26184_1');
     await expect(findCourse(http, '_999_1')).rejects.toMatchObject({ code: 'COURSE_NOT_FOUND' });
+  });
+});
+
+describe('moduleFolderName', () => {
+  it('title-cases the name, drops the ECTS suffix and the academic year', () => {
+    expect(moduleFolderName({ id: '_1_1', name: 'INTERNATIONAL TRADE (10 ECTS)', courseCode: 'ECU44201-202627' })).toBe(
+      'International Trade - ECU44201',
+    );
+    expect(moduleFolderName({ id: '_1_1', name: 'INTRODUCTION TO THE HISTORY OF THE MODERN MIDDLE EAST', courseCode: 'NMU11001-202425' })).toBe(
+      'Introduction to the History of the Modern Middle East - NMU11001',
+    );
+  });
+
+  it('falls back when the code or name is missing', () => {
+    expect(moduleFolderName({ id: '_1_1', name: 'HUMAN FACTORS' })).toBe('Human Factors');
+    expect(moduleFolderName({ id: '_1_1', name: '' })).toBe('_1_1');
+  });
+});
+
+describe('downloads directory', () => {
+  it('honours BB_DOWNLOADS_DIR without moving the session home', () => {
+    const before = { dl: process.env.BB_DOWNLOADS_DIR, home: process.env.BLACKBOARD_MCP_HOME };
+    process.env.BLACKBOARD_MCP_HOME = '/tmp/bb-home';
+    process.env.BB_DOWNLOADS_DIR = '/tmp/bb-downloads';
+    expect(paths.downloadsDir).toBe('/tmp/bb-downloads');
+    expect(paths.profileDir).toBe('/tmp/bb-home/chrome-profile');
+    process.env.BB_DOWNLOADS_DIR = '   ';
+    expect(paths.downloadsDir).toBe('/tmp/bb-home/downloads');
+    if (before.dl === undefined) delete process.env.BB_DOWNLOADS_DIR; else process.env.BB_DOWNLOADS_DIR = before.dl;
+    if (before.home === undefined) delete process.env.BLACKBOARD_MCP_HOME; else process.env.BLACKBOARD_MCP_HOME = before.home;
   });
 });

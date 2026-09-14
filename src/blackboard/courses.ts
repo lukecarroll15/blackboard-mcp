@@ -62,6 +62,26 @@ export function normalizeCourse(raw: unknown, enrollment?: unknown): Course {
   return course;
 }
 
+const LOWERCASE_WORDS = new Set(['a', 'an', 'and', 'as', 'at', 'for', 'in', 'of', 'on', 'or', 'the', 'to', '&']);
+
+/**
+ * Folder name for a course's downloads, matching the "<Module Name> - <CODE>"
+ * convention: "INTERNATIONAL TRADE (10 ECTS)" + "ECU44201-202627" becomes
+ * "International Trade - ECU44201". Falls back to the course id.
+ */
+export function moduleFolderName(course: Pick<Course, 'id' | 'name' | 'courseCode'>): string {
+  const code = course.courseCode?.replace(/-\d{6}$/, '');
+  const name = course.name
+    .replace(/\s*\(\d+\s*ECTS\)\s*$/i, '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w, i) => (i > 0 && LOWERCASE_WORDS.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+  if (name && code) return `${name} - ${code}`;
+  return name || code || course.id;
+}
+
 export interface ListCoursesOptions {
   includeUnavailable?: boolean;
 }

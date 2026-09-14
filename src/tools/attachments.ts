@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { downloadAttachmentRef, downloadAttachment, listContentFiles } from '../blackboard/attachments.js';
 import { getCourseContent } from '../blackboard/content.js';
-import { findCourse } from '../blackboard/courses.js';
+import { findCourse, moduleFolderName } from '../blackboard/courses.js';
 import { errorResult, jsonResult, READ_ONLY_ANNOTATIONS, type BBToolContext } from './util.js';
 
 export function registerAttachmentTools(server: McpServer, ctx: BBToolContext): void {
@@ -12,7 +12,7 @@ export function registerAttachmentTools(server: McpServer, ctx: BBToolContext): 
       title: 'Get Blackboard course attachment',
       description:
         'Download a course file (PDF, DOCX, PPTX, images, ...) from Blackboard to this machine and return its local path. ' +
-        'Files are saved under ~/.blackboard-mcp/downloads only when you call this tool; nothing is sent anywhere. ' +
+        'Files are saved in a per-module folder ("<Module Name> - <CODE>") under the downloads directory only when you call this tool; nothing is sent anywhere. ' +
         'Small text files also include a text excerpt. Read-only.',
       inputSchema: {
         course_id: z.string().describe('Blackboard course id from list_courses, e.g. "_26184_1" (course code also accepted).'),
@@ -41,7 +41,7 @@ export function registerAttachmentTools(server: McpServer, ctx: BBToolContext): 
         const saved = await ctx.callBB(async (http) => {
           if (chosen) {
             return downloadAttachmentRef(http, chosen, {
-              subfolder: course.courseCode ?? course.id,
+              subfolder: moduleFolderName(course),
             });
           }
           // Fallback for deployments that expose content-files endpoints.
@@ -49,7 +49,7 @@ export function registerAttachmentTools(server: McpServer, ctx: BBToolContext): 
             courseId: course.id,
             contentId: args.content_id,
             fileId: args.file_id,
-            subfolder: course.courseCode ?? course.id,
+            subfolder: moduleFolderName(course),
           });
         });
 

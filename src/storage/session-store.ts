@@ -25,6 +25,10 @@ export const paths = {
     return path.join(blackboardHome(), 'chrome-profile');
   },
   get downloadsDir(): string {
+    // Downloads can live somewhere visible (e.g. a course folder) without
+    // moving the session state along with them. Blank is ignored, as above.
+    const override = process.env.BB_DOWNLOADS_DIR?.trim();
+    if (override) return path.resolve(override);
     return path.join(blackboardHome(), 'downloads');
   },
   get metaFile(): string {
