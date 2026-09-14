@@ -15,7 +15,7 @@ import {
 const COOKIE = {
   name: 'BbRouter',
   value: 'expires:0,id:example,signature:example',
-  domain: 'blackboard.syr.edu',
+  domain: 'tcd.blackboard.com',
   path: '/',
   expires: -1,
   httpOnly: true,

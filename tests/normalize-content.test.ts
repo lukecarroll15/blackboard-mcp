@@ -47,8 +47,8 @@ describe('normalizeContentItem', () => {
 describe('extractWebdavLinks', () => {
   it('extracts and deduplicates bbcswebdav links, decoding entities', () => {
     const html =
-      '<a href="https://blackboard.syr.edu/bbcswebdav/xid-12345_1&amp;course_id=_26184_1">notes.pdf</a>' +
-      '<a href="https://blackboard.syr.edu/bbcswebdav/xid-12345_1&amp;course_id=_26184_1">notes.pdf</a>' +
+      '<a href="https://tcd.blackboard.com/bbcswebdav/xid-12345_1&amp;course_id=_26184_1">notes.pdf</a>' +
+      '<a href="https://tcd.blackboard.com/bbcswebdav/xid-12345_1&amp;course_id=_26184_1">notes.pdf</a>' +
       '<a href="/bbcswebdav/xid-67890_1">slides.pptx</a>';
     const links = extractWebdavLinks(html);
     expect(links).toHaveLength(2);

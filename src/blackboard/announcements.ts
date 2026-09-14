@@ -1,5 +1,6 @@
 import { globalCache, TTL } from './cache.js';
 import { findCourse } from './courses.js';
+import { BLACKBOARD_ORIGIN } from './hosts.js';
 import { getPaged } from './transport.js';
 import type { BBHttp } from './session.js';
 import type { Announcement } from './types.js';
@@ -24,7 +25,7 @@ export function normalizeAnnouncement(raw: unknown, courseId: string): Announcem
     bodyHtml,
     created,
     modified: toIso(rec.modified),
-    url: `https://blackboard.syr.edu/ultra/courses/${courseId}/cl/outline`,
+    url: `${BLACKBOARD_ORIGIN}/ultra/courses/${courseId}/cl/outline`,
   };
 }
 

@@ -63,7 +63,7 @@ export class FakeHttp implements BBHttp {
   }
 
   toSameOriginPath(href: string): string {
-    const u = new URL(href, 'https://blackboard.syr.edu');
+    const u = new URL(href, 'https://tcd.blackboard.com');
     return `${u.pathname}${u.search}`;
   }
 
@@ -166,7 +166,7 @@ export const COURSE_CONTENT_CHILDREN = {
       id: '_3001_1',
       title: 'Lecture Notes',
       description:
-        '<p>Slides attached.</p><a href="https://blackboard.syr.edu/bbcswebdav/xid-12345_1&amp;course_id=_26184_1">notes.pdf</a>',
+        '<p>Slides attached.</p><a href="https://tcd.blackboard.com/bbcswebdav/xid-12345_1&amp;course_id=_26184_1">notes.pdf</a>',
       created: '2026-08-20T10:00:00.000Z',
       modified: '2026-08-21T10:00:00.000Z',
       position: 1,

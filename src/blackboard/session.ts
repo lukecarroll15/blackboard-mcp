@@ -5,17 +5,16 @@ import { isBlackboardHost, isDownloadHost, BLACKBOARD_HOSTS } from './hosts.js';
 import type { BBIdentity } from './types.js';
 import { readMeta, writeMeta, loadCookies, saveCookies } from '../storage/session-store.js';
 
-export const BASE_URL = process.env.BB_BASE_URL ?? 'https://blackboard.syr.edu';
+export const BASE_URL = process.env.BB_BASE_URL ?? 'https://tcd.blackboard.com';
 
 /**
- * Syracuse's "SU NetID Login" SAML entry (the target of #netid-login on the
- * login page). Following it re-establishes the Blackboard session silently
+ * TCD's SAML entry (the "Sign in" link on tcd.blackboard.com, Microsoft SSO). Following it re-establishes the Blackboard session silently
  * whenever the browser's persistent Microsoft session allows it — no
  * credentials are ever entered by this tool.
  */
 const SSO_ENTRY_URL =
   process.env.BB_SSO_ENTRY_URL ??
-  'https://blackboard.syracuse.edu/auth-saml/saml/login?apId=_3987_1&redirectUrl=https%3A%2F%2Fblackboard.syracuse.edu%2Fultra%2Fcourses';
+  'https://tcd.blackboard.com/auth-saml/saml/login?apId=_3413_1&redirectUrl=https%3A%2F%2Ftcd.blackboard.com%2Fultra%2Fcourses';
 
 export { BLACKBOARD_HOSTS } from './hosts.js';
 
@@ -300,16 +299,16 @@ export class BlackboardSession implements BBHttp {
       if (state !== lastState) {
         lastState = state;
         if (state === 'on-sign-in-page') {
-          opts.onTick?.('Syracuse sign-in page is open — enter your NetID and approve Duo there; I will detect the moment you land back on Blackboard');
+          opts.onTick?.('TCD sign-in page is open - sign in with your TCD Microsoft account there; I will detect the moment you land back on Blackboard');
         } else if (state === 'not-signed-in') {
-          opts.onTick?.('Blackboard is reachable but NOT signed in — click "Sign In" in this window and complete SSO + Duo here');
+          opts.onTick?.('Blackboard is reachable but NOT signed in — click "Sign In" in this window and complete TCD sign-in here');
         } else if (state === 'probe-error') {
           opts.onTick?.(`can't verify the session yet (${truncate(probeError, 120)})`);
         }
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
-    throw new BlackboardError('NOT_LOGGED_IN', 'Timed out waiting for Blackboard login. Run npm run login and complete SSO + Duo in the browser window.');
+    throw new BlackboardError('NOT_LOGGED_IN', 'Timed out waiting for Blackboard login. Run npm run login and complete TCD sign-in in the browser window.');
   }
 
   /**
@@ -331,7 +330,7 @@ export class BlackboardSession implements BBHttp {
     const page = await this.ensureWorker();
     await page.goto(SSO_ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined);
     await page
-      .waitForURL(/blackboard\.(syr|syracuse)\.edu\/(ultra|webapps\/portal)/, { timeout: 30_000 })
+      .waitForURL((u) => isBlackboardHost(u) && /^\/(ultra|webapps\/portal)/.test(u.pathname), { timeout: 30_000 })
       .catch(() => undefined);
     await page.waitForTimeout(1500);
     const finalUrl = new URL(page.url());
@@ -718,7 +717,7 @@ export class BlackboardSession implements BBHttp {
         if (document.body && !document.getElementById('bbmcp-login-banner')) {
           const banner = document.createElement('div');
           banner.id = 'bbmcp-login-banner';
-          banner.textContent = '▶ blackboard-mcp: sign in with your NetID + Duo in THIS window (it has no bookmarks bar — that is how you know)';
+          banner.textContent = '▶ blackboard-mcp: sign in with your TCD account in THIS window (it has no bookmarks bar — that is how you know)';
           banner.style.cssText =
             'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#c5221f;color:#fff;padding:12px 18px;font:600 15px/1.4 -apple-system,system-ui,sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.4);';
           document.body.appendChild(banner);

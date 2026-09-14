@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { isBlackboardHost } from '../blackboard/hosts.js';
 import { BlackboardSession, BASE_URL } from '../blackboard/session.js';
 import { hasSession, paths } from '../storage/session-store.js';
 import { runCli } from './util.js';
@@ -43,7 +44,7 @@ async function main(): Promise<number> {
   page.on('response', async (response) => {
     try {
       const url = new URL(response.url());
-      if (!url.hostname.endsWith('blackboard.syr.edu')) return;
+      if (!isBlackboardHost(url)) return;
       const p = url.pathname;
       if (!p.startsWith('/learn/api/') && !p.startsWith('/bbcswebdav/') && !p.startsWith('/learn/api/public/')) return;
       const key = `${response.request().method()} ${p}`;

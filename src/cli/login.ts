@@ -4,7 +4,7 @@ import { runCli } from './util.js';
 
 /**
  * Interactive login. Opens a visible Chrome window on the dedicated project
- * profile; the student completes Syracuse SSO and Duo by hand. This tool never
+ * profile; the student completes TCD SSO and MFA by hand. This tool never
  * sees, requests, or stores any credential — it only waits for the browser to
  * land back on Blackboard and verifies the session with an authenticated call.
  */
@@ -12,10 +12,10 @@ async function main(): Promise<number> {
   process.stdout.write(
     [
       '',
-      'Blackboard login (Syracuse University)',
-      '--------------------------------------',
+      'Blackboard login (Trinity College Dublin)',
+      '-----------------------------------------',
       'A Chrome window will open using a dedicated blackboard-mcp profile.',
-      'Sign in with your NetID and complete Duo exactly as you normally would.',
+      'Sign in with your TCD Microsoft account exactly as you normally would.',
       'This tool never sees or stores your password, Duo codes, or MFA secrets.',
       'Waiting for you to finish (up to 15 minutes)...',
       '',

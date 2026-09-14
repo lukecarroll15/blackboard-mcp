@@ -1,5 +1,6 @@
 import { globalCache, TTL } from './cache.js';
 import { BlackboardError } from './errors.js';
+import { BLACKBOARD_ORIGIN } from './hosts.js';
 import { getPaged, getJson } from './transport.js';
 import type { BBHttp } from './session.js';
 import type { BBIdentity, Course } from './types.js';
@@ -56,8 +57,8 @@ export function normalizeCourse(raw: unknown, enrollment?: unknown): Course {
   if (lastAccessed) course.lastAccessed = lastAccessed;
   const organization = rec.organization === true;
   course.url = organization
-    ? `https://blackboard.syr.edu/ultra/organizations/${id}/outline`
-    : `https://blackboard.syr.edu/ultra/courses/${id}/outline`;
+    ? `${BLACKBOARD_ORIGIN}/ultra/organizations/${id}/outline`
+    : `${BLACKBOARD_ORIGIN}/ultra/courses/${id}/outline`;
   return course;
 }
 

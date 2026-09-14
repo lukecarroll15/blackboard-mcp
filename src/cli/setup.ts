@@ -175,7 +175,7 @@ async function checkSession(): Promise<boolean> {
 
 async function runLogin(): Promise<boolean> {
   console.log('\n  Opening a Chrome window for you to sign in.');
-  console.log('  Use the window with the RED BANNER. Sign in with your NetID and approve Duo.');
+  console.log('  Use the window with the RED BANNER. Sign in with your TCD account and approve MFA.');
   console.log('  This tool never sees or stores your password or Duo codes.');
   const session = await BlackboardSession.acquire({ headless: false });
   try {

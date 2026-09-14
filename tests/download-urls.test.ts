@@ -9,13 +9,13 @@ const CDN_BANNER = u('https://learn-us-east-1-prod-fleet01-beaker-xythos.content
 
 describe('isDownloadHost', () => {
   it('accepts Blackboard hostnames and the content CDN', () => {
-    expect(isDownloadHost(u('https://blackboard.syr.edu/bbcswebdav/xid-1_1'))).toBe(true);
-    expect(isDownloadHost(u('https://blackboard.syracuse.edu/x'))).toBe(true);
+    expect(isDownloadHost(u('https://tcd.blackboard.com/bbcswebdav/xid-1_1'))).toBe(true);
+    expect(isDownloadHost(u('https://tcd.blackboard.com/x'))).toBe(true);
     expect(isDownloadHost(u('https://learn-us-east-1-prod-fleet01-beaker-xythos.content.blackboardcdn.com/a/b'))).toBe(true);
   });
 
   it('rejects plain http, so a resolved link can never downgrade', () => {
-    expect(isDownloadHost(u('http://blackboard.syr.edu/bbcswebdav/xid-1_1'))).toBe(false);
+    expect(isDownloadHost(u('http://tcd.blackboard.com/bbcswebdav/xid-1_1'))).toBe(false);
   });
 
   it('rejects unrelated and look-alike hosts', () => {
@@ -23,22 +23,22 @@ describe('isDownloadHost', () => {
     // Suffix matching must not be fooled by a prefix or a longer parent domain.
     expect(isDownloadHost(u('https://notblackboardcdn.com/x'))).toBe(false);
     expect(isDownloadHost(u('https://blackboardcdn.com.evil.com/x'))).toBe(false);
-    expect(isDownloadHost(u('https://blackboard.syr.edu.evil.com/x'))).toBe(false);
+    expect(isDownloadHost(u('https://tcd.blackboard.com.evil.com/x'))).toBe(false);
   });
 });
 
 describe('isFileCandidateUrl', () => {
   it('treats /bbcswebdav/ on a Blackboard host as a file', () => {
-    expect(isFileCandidateUrl(u('https://blackboard.syr.edu/bbcswebdav/xid-16632656_1_1'))).toBe(true);
+    expect(isFileCandidateUrl(u('https://tcd.blackboard.com/bbcswebdav/xid-16632656_1_1'))).toBe(true);
   });
 
   it('rejects Blackboard app and API routes that answer with file-ish types', () => {
     // Regression: the telemetry endpoint replies with a file-like content type
     // and was being collected as a download candidate.
-    expect(isFileCandidateUrl(u('https://blackboard.syracuse.edu/telemetry/api/v1/browser/interactions'))).toBe(false);
-    expect(isFileCandidateUrl(u('https://blackboard.syr.edu/learn/api/public/v1/courses'))).toBe(false);
-    expect(isFileCandidateUrl(u('https://blackboard.syr.edu/ultra/redirect?redirectType=nautilus'))).toBe(false);
-    expect(isFileCandidateUrl(u('https://blackboard.syr.edu/ultra/courses'))).toBe(false);
+    expect(isFileCandidateUrl(u('https://tcd.blackboard.com/telemetry/api/v1/browser/interactions'))).toBe(false);
+    expect(isFileCandidateUrl(u('https://tcd.blackboard.com/learn/api/public/v1/courses'))).toBe(false);
+    expect(isFileCandidateUrl(u('https://tcd.blackboard.com/ultra/redirect?redirectType=nautilus'))).toBe(false);
+    expect(isFileCandidateUrl(u('https://tcd.blackboard.com/ultra/courses'))).toBe(false);
   });
 
   it('accepts any path on the content CDN, which serves only files', () => {
@@ -53,7 +53,7 @@ describe('isFileCandidateUrl', () => {
   });
 
   it('agrees with isBlackboardHost about what counts as Blackboard', () => {
-    const bb = u('https://blackboard.syr.edu/bbcswebdav/x');
+    const bb = u('https://tcd.blackboard.com/bbcswebdav/x');
     expect(isBlackboardHost(bb)).toBe(true);
     expect(isFileCandidateUrl(bb)).toBe(true);
   });
@@ -66,7 +66,7 @@ describe('isFileNavigation', () => {
     expect(
       isFileNavigation({
         isNavigation: true,
-        url: u('https://blackboard.syracuse.edu/bbcswebdav/pid-13066507-dt-content-rid-164784021_1/xid-164784021_1'),
+        url: u('https://tcd.blackboard.com/bbcswebdav/pid-13066507-dt-content-rid-164784021_1/xid-164784021_1'),
       }),
     ).toBe(true);
     expect(isFileNavigation({ isNavigation: true, url: CDN_FILE })).toBe(true);
@@ -84,10 +84,10 @@ describe('isFileNavigation', () => {
 
   it('rejects navigations to app and API routes', () => {
     expect(
-      isFileNavigation({ isNavigation: true, url: u('https://blackboard.syr.edu/ultra/redirect?redirectType=nautilus') }),
+      isFileNavigation({ isNavigation: true, url: u('https://tcd.blackboard.com/ultra/redirect?redirectType=nautilus') }),
     ).toBe(false);
     expect(
-      isFileNavigation({ isNavigation: true, url: u('https://blackboard.syr.edu/learn/api/public/v1/courses') }),
+      isFileNavigation({ isNavigation: true, url: u('https://tcd.blackboard.com/learn/api/public/v1/courses') }),
     ).toBe(false);
     // The LTI launches the redirect page fires on its way through.
     expect(

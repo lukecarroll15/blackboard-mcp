@@ -9,7 +9,7 @@ export function registerCourseTools(server: McpServer, ctx: BBToolContext): void
     {
       title: 'List Blackboard courses',
       description:
-        'List the student’s currently visible Blackboard (Syracuse University) courses. ' +
+        'List the student’s currently visible Blackboard (Trinity College Dublin) courses. ' +
         'Returns course ids needed by every other blackboard tool. Read-only.',
       inputSchema: {},
       annotations: READ_ONLY_ANNOTATIONS,
