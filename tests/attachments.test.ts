@@ -158,6 +158,17 @@ describe('downloadAttachment', () => {
     expect(left.some((f) => f.startsWith('.partial-'))).toBe(false);
   });
 
+  it('removes the module folder a failed download created', async () => {
+    globalCache.clear();
+    const http = new FakeHttp();
+    installDefaultRoutes(http);
+    http.bufferReply = () => ({ status: 404, contentType: null, bytes: Buffer.alloc(0) });
+    await expect(
+      downloadAttachmentRef(http, { courseId: '_26184_1', contentId: '_3001_1' }, { subfolder: 'Empty Module - XX0000' }),
+    ).rejects.toMatchObject({ code: 'ATTACHMENT_NOT_FOUND' });
+    await expect(fsp.access(path.join(paths.downloadsDir, 'Empty Module - XX0000'))).rejects.toThrow();
+  });
+
   it('reports a failed download by status rather than writing a stub', async () => {
     globalCache.clear();
     const http = new FakeHttp();

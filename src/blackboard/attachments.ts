@@ -205,6 +205,16 @@ function safeJoin(root: string, ...parts: string[]): string {
 }
 
 /**
+ * Remove a failed download's partial file, and its folder if that is now
+ * empty, so a failed call leaves no trace. rmdir refuses a non-empty folder,
+ * which is exactly the guard wanted here.
+ */
+async function discardPartial(partial: string, dir: string): Promise<void> {
+  await fs.rm(partial, { force: true });
+  if (dir !== path.resolve(paths.downloadsDir)) await fs.rmdir(dir).catch(() => undefined);
+}
+
+/**
  * Download one resolved attachment reference (e.g. from a content item's
  * handler data — the /ultra/redirect link resolves to the actual bytes).
  */
@@ -239,11 +249,11 @@ export async function downloadAttachmentRef(
       ? await http.captureRedirectDownload(url, partial)
       : await http.fetchToFile(url, partial);
   } catch (err) {
-    await fs.rm(partial, { force: true });
+    await discardPartial(partial, dir);
     throw err;
   }
   if (resp.status !== 200) {
-    await fs.rm(partial, { force: true });
+    await discardPartial(partial, dir);
     throw new BlackboardError(
       resp.status === 404 ? 'ATTACHMENT_NOT_FOUND' : 'BLACKBOARD_REQUEST_FAILED',
       `Attachment download failed (HTTP ${resp.status}).`,
