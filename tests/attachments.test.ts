@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { downloadAttachment, downloadAttachmentRef, sanitizeFileName } from '../src/blackboard/attachments.js';
 import { BlackboardError } from '../src/blackboard/errors.js';
-import { MAX_DOWNLOAD_BYTES } from '../src/blackboard/session.js';
+import { writeBodyToFile } from '../src/blackboard/download.js';
 import { globalCache } from '../src/blackboard/cache.js';
 import { FakeHttp, installDefaultRoutes } from './helpers/fake-http.js';
 import { paths } from '../src/storage/session-store.js';
@@ -130,19 +130,32 @@ describe('downloadAttachment', () => {
     expect(saved.fileName).toBe('big.pdf');
   });
 
-  it('refuses a file over the size ceiling instead of writing it', async () => {
+  it('stops a stream that passes the size ceiling and leaves no partial file', async () => {
+    const dest = path.join(os.tmpdir(), `bb-cap-${process.pid}.bin`);
+    const body = new Blob([Buffer.alloc(64 * 1024, 0x41)]).stream();
+    await expect(writeBodyToFile(body, dest, 1024)).rejects.toMatchObject({ code: 'CONTENT_NOT_AVAILABLE' });
+    await expect(fsp.access(dest)).rejects.toThrow();
+  });
+
+  it('streams a body under the ceiling to disk byte for byte', async () => {
+    const dest = path.join(os.tmpdir(), `bb-ok-${process.pid}.bin`);
+    const data = Buffer.alloc(300 * 1024, 0x42);
+    const written = await writeBodyToFile(new Blob([data]).stream(), dest, 1024 * 1024);
+    expect(written).toBe(data.length);
+    expect((await fsp.readFile(dest)).equals(data)).toBe(true);
+    await fsp.rm(dest, { force: true });
+  });
+
+  it('leaves no partial file behind when a download fails', async () => {
     globalCache.clear();
     const http = new FakeHttp();
     installDefaultRoutes(http);
-    http.bufferReply = () => ({
-      status: 200,
-      contentType: 'application/pdf',
-      bytes: Buffer.alloc(MAX_DOWNLOAD_BYTES + 1),
-      filename: 'huge.pdf',
-    });
+    http.bufferReply = () => ({ status: 500, contentType: null, bytes: Buffer.alloc(0) });
     await expect(
-      downloadAttachmentRef(http, { courseId: '_26184_1', contentId: '_3001_1', fileName: 'huge.pdf' }),
-    ).rejects.toMatchObject({ code: 'CONTENT_NOT_AVAILABLE' });
+      downloadAttachmentRef(http, { courseId: '_26184_1', contentId: '_3001_1', fileName: 'x.pdf' }),
+    ).rejects.toMatchObject({ code: 'BLACKBOARD_REQUEST_FAILED' });
+    const left = await fsp.readdir(paths.downloadsDir).catch(() => [] as string[]);
+    expect(left.some((f) => f.startsWith('.partial-'))).toBe(false);
   });
 
   it('reports a failed download by status rather than writing a stub', async () => {

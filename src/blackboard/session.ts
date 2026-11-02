@@ -3,6 +3,7 @@ import { launchBrowser } from './browser.js';
 import { BlackboardError, isBlackboardError, truncate } from './errors.js';
 import { isBlackboardHost, isDownloadHost, BLACKBOARD_HOSTS } from './hosts.js';
 import type { BBIdentity } from './types.js';
+import { MAX_DOWNLOAD_BYTES, tooLargeError, writeBodyToFile } from './download.js';
 import { readMeta, writeMeta, loadCookies, saveCookies } from '../storage/session-store.js';
 
 export const BASE_URL = process.env.BB_BASE_URL ?? 'https://tcd.blackboard.com';
@@ -32,10 +33,11 @@ export interface BBJsonResponse {
   url: string;
 }
 
-export interface BBBufferResponse {
+/** A download streamed to disk. The file at the destination exists only when status is 200. */
+export interface BBDownloadResponse {
   status: number;
   contentType: string | null;
-  bytes: Buffer;
+  sizeBytes: number;
   filename?: string;
 }
 
@@ -45,11 +47,12 @@ export interface BBBufferResponse {
  */
 export interface BBHttp {
   fetchJson(path: string, init?: BBRequestInit): Promise<BBJsonResponse>;
-  fetchBuffer(pathOrUrl: string): Promise<BBBufferResponse>;
+  /** Stream a same-origin download (following redirects to the content CDN) to destPath. */
+  fetchToFile(pathOrUrl: string, destPath: string): Promise<BBDownloadResponse>;
   /** Normalize a returned pagination href to a same-origin path. */
   toSameOriginPath(href: string): string;
   /** Resolve an /ultra/redirect link through the real page and capture the file. */
-  captureRedirectDownload(pathOrUrl: string, timeoutMs?: number): Promise<BBBufferResponse>;
+  captureRedirectDownload(pathOrUrl: string, destPath: string, timeoutMs?: number): Promise<BBDownloadResponse>;
 }
 
 interface EvaluateResult {
@@ -66,12 +69,11 @@ function looksLikeLoginPage(url: URL): boolean {
   return p.startsWith('/webapps/login') || p.startsWith('/login') || p === '/ultra/session-expired';
 }
 
-/**
- * Hard ceiling on a single attachment. Shared with the attachment writer so
- * the limit is enforced once on the declared size (before buffering) and once
- * on the real size (after), rather than drifting between the two.
- */
-export const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
+/** Redirect hops a download may take (API -> webdav -> CDN is two). */
+const MAX_DOWNLOAD_REDIRECTS = 6;
+
+/** Whole-transfer ceiling for one download; generous enough for a long recording. */
+const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * How long the page may sit idle before we conclude a download link is never
@@ -487,21 +489,12 @@ export class BlackboardSession implements BBHttp {
   }
 
   /**
-   * Binary fetch (attachments). Uses the context's API request context, which
-   * shares the same cookie jar as the logged-in browser session.
+   * Binary fetch (attachments), streamed to disk. Starts on a Blackboard host
+   * and follows redirects to the content CDN with the session's cookies.
    */
-  async fetchBuffer(pathOrUrl: string): Promise<BBBufferResponse> {
+  async fetchToFile(pathOrUrl: string, destPath: string): Promise<BBDownloadResponse> {
     await this.ensureWorker();
-    const url = this.toSameOriginUrl(pathOrUrl);
-    const res = await this.context.request.get(url, { timeout: 90_000 });
-    const bytes = await res.body();
-    const headers = res.headers();
-    return {
-      status: res.status(),
-      contentType: headers['content-type'] ?? null,
-      bytes,
-      filename: parseContentDispositionFilename(headers['content-disposition']),
-    };
+    return this.streamToFile(this.toSameOriginUrl(pathOrUrl), destPath);
   }
 
   /**
@@ -526,20 +519,20 @@ export class BlackboardSession implements BBHttp {
    * URL over HTTP through the same cookie jar, where there is no size ceiling
    * and nothing to race.
    */
-  async captureRedirectDownload(pathOrUrl: string, timeoutMs = 45_000): Promise<BBBufferResponse> {
+  async captureRedirectDownload(pathOrUrl: string, destPath: string, timeoutMs = 45_000): Promise<BBDownloadResponse> {
     const fileUrls = await this.resolveDownloadUrls(pathOrUrl, timeoutMs);
 
     // "Too large" is a real answer about the file, not a failed strategy —
     // hold it and report it rather than falling through to "not found".
     let sizeRefusal: unknown = null;
     for (const url of fileUrls) {
-      const fetched = await this.fetchDownloadUrl(url).catch((err: unknown) => {
+      const fetched = await this.fetchDownloadUrl(url, destPath).catch((err: unknown) => {
         if (isBlackboardError(err) && err.code === 'CONTENT_NOT_AVAILABLE') sizeRefusal = err;
         return null;
       });
-      if (fetched && fetched.status === 200 && fetched.bytes.length > 0) {
+      if (fetched && fetched.status === 200 && fetched.sizeBytes > 0) {
         if (process.env.BB_DEBUG === '1') {
-          console.error(`[bb-debug] fetched ${fetched.bytes.length}b from ${url.slice(0, 100)}`);
+          console.error(`[bb-debug] fetched ${fetched.sizeBytes}b from ${url.slice(0, 100)}`);
         }
         return fetched;
       }
@@ -635,35 +628,67 @@ export class BlackboardSession implements BBHttp {
   }
 
   /**
-   * Fetch a resolved download link through the context's request API, which
-   * shares the browser's cookie jar. May be cross-origin (the content CDN), so
-   * the host is re-checked against the allowlist here as well.
+   * Fetch a resolved download link to disk. May be cross-origin (the content
+   * CDN), so the host is re-checked against the allowlist here as well.
    */
-  private async fetchDownloadUrl(url: string): Promise<BBBufferResponse> {
+  private async fetchDownloadUrl(url: string, destPath: string): Promise<BBDownloadResponse> {
     const parsed = new URL(url);
     if (!isFileCandidateUrl(parsed)) {
       throw new BlackboardError('INVALID_INPUT', `Refusing to fetch a download from ${parsed.hostname}${parsed.pathname}.`);
     }
-    const res = await this.context.request.get(url, { timeout: 180_000 });
-    const headers = res.headers();
-    const declared = Number(headers['content-length'] ?? '');
-    if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) {
-      throw new BlackboardError(
-        'CONTENT_NOT_AVAILABLE',
-        `Attachment is too large to download (${Math.round(declared / 1024 / 1024)} MB, limit ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB).`,
-      );
+    return this.streamToFile(url, destPath);
+  }
+
+  /**
+   * Stream a download to disk with Node's fetch, attaching this session's
+   * cookies for each hop. Playwright's request API holds the whole body in
+   * memory, which is why large recordings used to be refused; streaming keeps
+   * memory flat whatever the file size.
+   *
+   * Redirects are followed by hand, as a browser would: every hop must be
+   * HTTPS, and each one gets only the cookies the jar scopes to that hop's own
+   * host, so the Blackboard session never travels to another domain. Hops are
+   * not held to the host allowlist (callers check the entry URL), because
+   * Blackboard hands files off to regional file-store hosts it does not list.
+   */
+  private async streamToFile(startUrl: string, destPath: string): Promise<BBDownloadResponse> {
+    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+    let url = new URL(startUrl);
+    for (let hop = 0; hop <= MAX_DOWNLOAD_REDIRECTS; hop++) {
+      if (url.protocol !== 'https:') {
+        throw new BlackboardError('INVALID_INPUT', `Refusing to follow a download over ${url.protocol}`);
+      }
+      const cookie = (await this.context.cookies(url.toString())).map((c) => `${c.name}=${c.value}`).join('; ');
+      const res = await fetch(url, { redirect: 'manual', headers: cookie ? { cookie } : {}, signal });
+
+      const location = res.headers.get('location');
+      if (res.status >= 300 && res.status < 400 && location) {
+        await res.body?.cancel();
+        url = new URL(location, url);
+        continue;
+      }
+
+      const contentType = res.headers.get('content-type');
+      const filename = parseContentDispositionFilename(res.headers.get('content-disposition') ?? undefined);
+      if (res.status !== 200 || !res.body) {
+        await res.body?.cancel();
+        return { status: res.status, contentType, sizeBytes: 0, filename };
+      }
+      // An expired or unauthorized link comes back as an HTML page rather than
+      // a 4xx, so treat HTML as "not the file" and let the caller move on.
+      if ((contentType ?? '').includes('text/html')) {
+        await res.body.cancel();
+        throw new BlackboardError('ATTACHMENT_NOT_FOUND', 'Download URL returned a page instead of a file.');
+      }
+      const declared = Number(res.headers.get('content-length') ?? '');
+      if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) {
+        await res.body.cancel();
+        throw tooLargeError(MAX_DOWNLOAD_BYTES, declared);
+      }
+      const sizeBytes = await writeBodyToFile(res.body, destPath);
+      return { status: 200, contentType, sizeBytes, filename };
     }
-    // An expired or unauthorized link comes back as an HTML page rather than a
-    // 4xx, so treat HTML as "not the file" and let the caller move on.
-    if ((headers['content-type'] ?? '').includes('text/html')) {
-      throw new BlackboardError('ATTACHMENT_NOT_FOUND', 'Download URL returned a page instead of a file.');
-    }
-    return {
-      status: res.status(),
-      contentType: headers['content-type'] ?? null,
-      bytes: await res.body(),
-      filename: parseContentDispositionFilename(headers['content-disposition']),
-    };
+    throw new BlackboardError('BLACKBOARD_REQUEST_FAILED', 'Download redirected too many times.');
   }
 
   /** Enforce same-origin so this session can never be used as a generic proxy. */

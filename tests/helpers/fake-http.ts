@@ -1,4 +1,13 @@
-import type { BBBufferResponse, BBHttp, BBJsonResponse, BBRequestInit } from '../../src/blackboard/session.js';
+import { promises as fs } from 'node:fs';
+import type { BBDownloadResponse, BBHttp, BBJsonResponse, BBRequestInit } from '../../src/blackboard/session.js';
+
+/** What a fake download serves; written to the destination when status is 200. */
+export interface FakeBuffer {
+  status: number;
+  contentType: string | null;
+  bytes: Buffer;
+  filename?: string;
+}
 
 export interface FakeReply {
   status?: number;
@@ -50,16 +59,22 @@ export class FakeHttp implements BBHttp {
   }
 
   /** Overrides the bytes both fetch paths return, for size/failure cases. */
-  public bufferReply: (pathOrUrl: string) => BBBufferResponse = () => ({
+  public bufferReply: (pathOrUrl: string) => FakeBuffer = () => ({
     status: 200,
     contentType: 'application/pdf',
     bytes: Buffer.from('%PDF-1.4 fake'),
     filename: 'downloaded.pdf',
   });
 
-  async fetchBuffer(pathOrUrl: string): Promise<BBBufferResponse> {
+  private async serve(pathOrUrl: string, destPath: string): Promise<BBDownloadResponse> {
+    const r = this.bufferReply(pathOrUrl);
+    if (r.status === 200) await fs.writeFile(destPath, r.bytes);
+    return { status: r.status, contentType: r.contentType, sizeBytes: r.bytes.length, filename: r.filename };
+  }
+
+  async fetchToFile(pathOrUrl: string, destPath: string): Promise<BBDownloadResponse> {
     this.requests.push(`BUFFER ${pathOrUrl}`);
-    return this.bufferReply(pathOrUrl);
+    return this.serve(pathOrUrl, destPath);
   }
 
   toSameOriginPath(href: string): string {
@@ -67,9 +82,9 @@ export class FakeHttp implements BBHttp {
     return `${u.pathname}${u.search}`;
   }
 
-  async captureRedirectDownload(pathOrUrl: string): Promise<BBBufferResponse> {
+  async captureRedirectDownload(pathOrUrl: string, destPath: string): Promise<BBDownloadResponse> {
     this.requests.push(`CAPTURE ${pathOrUrl}`);
-    return this.bufferReply(pathOrUrl);
+    return this.serve(pathOrUrl, destPath);
   }
 }
 

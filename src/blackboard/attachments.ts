@@ -2,11 +2,12 @@ import { globalCache, TTL } from './cache.js';
 import { BlackboardError, isBlackboardError, truncate } from './errors.js';
 import { isBlackboardHost } from './hosts.js';
 import { getJson } from './transport.js';
-import { MAX_DOWNLOAD_BYTES, type BBHttp } from './session.js';
+import type { BBHttp } from './session.js';
 import type { AttachmentRef, AttachmentSaveResult } from './types.js';
 import { asRecord, htmlToText, numField, strField } from './util.js';
 import { paths } from '../storage/session-store.js';
 import { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const API = '/learn/api/public/v1';
@@ -222,33 +223,36 @@ export async function downloadAttachmentRef(
   if (!url) {
     throw new BlackboardError('ATTACHMENT_NOT_FOUND', 'Attachment has no downloadable URL.');
   }
-  // /ultra/redirect links resolve through the Ultra SPA at runtime; let the
-  // authenticated page follow it and capture the file response.
-  const resp = url.includes('/ultra/redirect')
-    ? await http.captureRedirectDownload(url)
-    : await http.fetchBuffer(url);
+  const dir = opts.subfolder
+    ? safeJoin(paths.downloadsDir, sanitizeFileName(opts.subfolder))
+    : safeJoin(paths.downloadsDir);
+  await fs.mkdir(dir, { recursive: true });
+  // Stream into a hidden partial file first: the final name can depend on the
+  // response's Content-Disposition, and a failed transfer must leave nothing
+  // behind that looks like a finished download.
+  const partial = safeJoin(dir, `.partial-${randomUUID()}`);
+  let resp;
+  try {
+    // /ultra/redirect links resolve through the Ultra SPA at runtime; let the
+    // authenticated page follow it and capture the file response.
+    resp = url.includes('/ultra/redirect')
+      ? await http.captureRedirectDownload(url, partial)
+      : await http.fetchToFile(url, partial);
+  } catch (err) {
+    await fs.rm(partial, { force: true });
+    throw err;
+  }
   if (resp.status !== 200) {
+    await fs.rm(partial, { force: true });
     throw new BlackboardError(
       resp.status === 404 ? 'ATTACHMENT_NOT_FOUND' : 'BLACKBOARD_REQUEST_FAILED',
       `Attachment download failed (HTTP ${resp.status}).`,
       { status: resp.status },
     );
   }
-  // Backstop: the fetch layer already refuses anything whose declared size is
-  // over the ceiling, but a response without Content-Length gets here unchecked.
-  if (resp.bytes.length > MAX_DOWNLOAD_BYTES) {
-    throw new BlackboardError(
-      'CONTENT_NOT_AVAILABLE',
-      `Attachment is too large to download (over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB).`,
-    );
-  }
 
   const rawName = opts.fileName ?? ref.fileName ?? resp.filename ?? `attachment-${ref.contentId}`;
   const fileName = sanitizeFileName(rawName);
-  const dir = opts.subfolder
-    ? safeJoin(paths.downloadsDir, sanitizeFileName(opts.subfolder))
-    : safeJoin(paths.downloadsDir);
-  await fs.mkdir(dir, { recursive: true });
   let target = safeJoin(dir, fileName);
   let counter = 1;
   while (true) {
@@ -260,16 +264,16 @@ export async function downloadAttachmentRef(
       break;
     }
   }
-  await fs.writeFile(target, resp.bytes);
+  await fs.rename(partial, target);
 
   const result: AttachmentSaveResult = {
     path: target,
     fileName: path.basename(target),
-    sizeBytes: resp.bytes.length,
+    sizeBytes: resp.sizeBytes,
     mimeType: resp.contentType ?? ref.mimeType,
   };
-  if (isTexty(result.fileName, result.mimeType) && resp.bytes.length <= TEXT_EXCERPT_MAX_BYTES) {
-    result.textExcerpt = truncate(resp.bytes.toString('utf8'), TEXT_EXCERPT_CHARS);
+  if (isTexty(result.fileName, result.mimeType) && resp.sizeBytes <= TEXT_EXCERPT_MAX_BYTES) {
+    result.textExcerpt = truncate(await fs.readFile(target, 'utf8'), TEXT_EXCERPT_CHARS);
   }
   return result;
 }
