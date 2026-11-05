@@ -5,6 +5,10 @@ grades are, what your professors posted, and the files for any assignment. It wo
 own logged-in Blackboard session, so it can only see what you can already see. It is
 read-only: it can never submit, post, message, or change anything.
 
+This version is set up for **Trinity College Dublin** (`tcd.blackboard.com`). It is a fork of
+[alanwtom/blackboard-mcp](https://github.com/alanwtom/blackboard-mcp), originally built for
+Syracuse University.
+
 Setup takes about ten minutes and you only do it once. If you have never used a terminal,
 just copy and paste each command exactly as written.
 
@@ -15,7 +19,7 @@ just copy and paste each command exactly as written.
 1. A Mac, or a Windows 10 / 11 PC
 2. [Google Chrome](https://www.google.com/chrome/)
 3. [Node.js](https://nodejs.org) version 20 or newer (get the LTS installer)
-4. An AI app that supports MCP, such as [Claude Desktop](https://claude.ai/download) which is free for all Syracuse Students!
+4. An AI app that supports MCP, such as [Claude Desktop](https://claude.ai/download) (free)
 
 **Opening a terminal.** On a Mac, press Cmd + Space, type "Terminal", press Enter. On Windows,
 press the Windows key, type "PowerShell", press Enter.
@@ -32,7 +36,7 @@ Run these commands, one at a time.
 ```bash
 mkdir -p ~/Documents/GitHub
 cd ~/Documents/GitHub
-git clone https://github.com/alanwtom/blackboard-mcp.git
+git clone https://github.com/lukecarroll15/blackboard-mcp.git
 cd blackboard-mcp
 npm run setup
 ```
@@ -42,7 +46,7 @@ npm run setup
 ```powershell
 mkdir ~\Documents\GitHub -Force
 cd ~\Documents\GitHub
-git clone https://github.com/alanwtom/blackboard-mcp.git
+git clone https://github.com/lukecarroll15/blackboard-mcp.git
 cd blackboard-mcp
 npm run setup
 ```
@@ -65,8 +69,8 @@ first if `git` is not recognized, then open a new PowerShell window.)
 4. Confirms everything works
 
 For the login step, use the Chrome window with the red banner (not your usual Chrome
-browser). Sign in with your NetID and approve Duo exactly like usual. Your password and Duo
-codes are never seen or saved by this project: that part is always you typing in a real
+browser). Sign in with your TCD account and approve the sign-in prompt exactly like usual.
+Your password and MFA codes are never seen or saved by this project: that part is always you typing in a real
 browser.
 
 When the wizard says everything is ready, quit and reopen your AI app, and you are done.
@@ -94,7 +98,7 @@ Windows.
 | "Blackboard session expired" | Run `npm run login` and sign in again. This is normal after a while. |
 | A question fails | Run `npm run status`, then try again. Blackboard has brief hiccups sometimes. |
 | "browser profile is already in use" | Something else already has the session open. Close the other terminal, and quit your AI app, before running `npm run login`. |
-| Login window confusion | Type your NetID in the window with the red banner. It is a separate private browser, not your usual Chrome. |
+| Login window confusion | Sign in with your TCD account in the window with the red banner. It is a separate private browser, not your usual Chrome. |
 | AI shows no Blackboard tools | Quit the AI app completely and reopen it. On Windows, closing the window is not enough: right-click the icon in the system tray and choose Quit. Then re-check the path in the manual steps. |
 | A course looks empty | Archived courses are locked by the university. New courses may have nothing posted yet. |
 | macOS: still no tools after restarting | Claude Desktop is launched by Finder, which does not always know where `node` lives — most often when Node came from `nvm` or Homebrew rather than the installer from nodejs.org. Run `which node`, then put that full path in place of `"node"` in the config block in the manual steps below. |
@@ -106,7 +110,7 @@ Windows.
 - Read-only by design: this project contains no code that could submit work, post messages,
   or change anything.
 - It only sees what you can see, because it uses your own session.
-- Your password and Duo codes are never requested, read, or stored.
+- Your password and MFA codes are never requested, read, or stored.
 - Everything stays on your own computer. To erase it all, run `npm run logout`, or delete the
   `.blackboard-mcp` folder in your home folder (`~/.blackboard-mcp` on a Mac,
   `C:\Users\yourname\.blackboard-mcp` on Windows). Never share that folder; it keeps you
@@ -116,7 +120,7 @@ Windows.
 
 Use it for yourself at a human pace, and check your university's acceptable-use policy
 before using any automation with your student account. Not affiliated with or endorsed by
-Syracuse University or Anthology/Blackboard.
+Trinity College Dublin, Syracuse University or Anthology/Blackboard.
 
 ## Manual setup (if you prefer doing it by hand)
 
@@ -136,7 +140,7 @@ npm run build
 npm run login
 ```
 
-A Chrome window opens with a red banner. Sign in with your NetID and approve Duo there. When
+A Chrome window opens with a red banner. Sign in with your TCD account and approve the sign-in prompt there. When
 you land back on Blackboard, the window closes by itself.
 
 3. **Check that it worked**
@@ -216,14 +220,14 @@ claude mcp add blackboard -- "$((Get-Command node).Source)" "$PWD\dist\index.js"
 - **Stack**: TypeScript (ESM), Node 20+, Playwright (Chrome channel, dedicated profile),
   MCP TypeScript SDK over stdio, Zod, Vitest.
 - **Data access**: Blackboard Learn REST API, called as same-origin requests from a page on
-  the Blackboard host, so requests match what the Ultra web app itself sends. Both
-  `blackboard.syr.edu` and `blackboard.syracuse.edu` (separate cookie domains) are supported.
+  the Blackboard host, so requests match what the Ultra web app itself sends. The
+  default host is `tcd.blackboard.com`.
 - **Session resilience**: Learn's session cookie does not survive a browser restart, so the
   authenticated cookie set is snapshotted to `~/.blackboard-mcp/browser-state.json` (mode
   0600 where the OS honours POSIX modes; on Windows the per-user ACL on `C:\Users\<name>`
   does that job) and restored on launch. While the institution SSO session lasts, the SAML
   entry is followed silently to re-authenticate with no interaction.
-- **Endpoints** (verified against Syracuse, Aug 2026): `users/me`,
+- **Endpoints** (verified against Syracuse, Aug 2026, and in use at TCD since Sept 2026): `users/me`,
   `users/{id}/courses?expand=course`, course contents (flat listings with `parentId`; file
   data on `contentHandler.file`), course announcements, `calendars/items`, and the v2
   gradebook (`columns`, `columns/{id}/users/me`; due dates at `grading.due`, points at
@@ -260,8 +264,9 @@ claude mcp add blackboard -- "$((Get-Command node).Source)" "$PWD\dist\index.js"
   - `where` lists the extensionless npm shim ahead of the runnable `.cmd`, so PATH lookups
     prefer a PATHEXT match, and `.cmd` shims are spawned through `cmd.exe` with quoted
     arguments (project paths often contain spaces).
-- **Compatibility**: built for Syracuse University Blackboard Ultra, Aug 2026. Other schools
-  need the configuration above plus small parser checks.
+- **Compatibility**: built for Syracuse University Blackboard Ultra (Aug 2026) and adapted for
+  Trinity College Dublin. Tested at TCD on macOS only so far. Other schools need the
+  configuration above plus small parser checks.
 
 </details>
 
