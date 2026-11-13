@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getCourseContent } from '../blackboard/content.js';
-import { errorResult, jsonResult, READ_ONLY_ANNOTATIONS, type BBToolContext } from './util.js';
+import { contentTruncation, getCourseContent } from '../blackboard/content.js';
+import { errorResult, jsonResult, limitations, READ_ONLY_ANNOTATIONS, type BBToolContext } from './util.js';
 
 export function registerContentTools(server: McpServer, ctx: BBToolContext): void {
   server.registerTool(
@@ -10,7 +10,9 @@ export function registerContentTools(server: McpServer, ctx: BBToolContext): voi
       title: 'Get Blackboard course content',
       description:
         'List a course’s content items (folders, documents, files, assignments, tests, links) from Blackboard. ' +
-        'Hierarchy is expanded a couple of folder levels; pass folder_id to go deeper into one folder. Read-only.',
+        'Hierarchy is expanded a couple of folder levels; pass folder_id to go deeper into one folder. ' +
+        'Each item lists its "links" (Google Docs/Sheets, Zoom, YouTube, readings...): open one with read_link. ' +
+        'Files open with get_attachment. Read-only.',
       inputSchema: {
         course_id: z.string().describe('Blackboard course id from list_courses, e.g. "_26184_1" (course code also accepted).'),
         folder_id: z.string().optional().describe('Content id of a folder to list instead of the course root.'),
@@ -26,6 +28,15 @@ export function registerContentTools(server: McpServer, ctx: BBToolContext): voi
           course_id: args.course_id,
           folder_id: args.folder_id ?? null,
           count: items.length,
+          ...limitations([
+            contentTruncation(items),
+            (() => {
+              const tools = items.filter((i) => i.type === 'tool');
+              return tools.length > 0
+                ? `${tools.map((t) => `"${t.title}"`).join(', ')} ${tools.length === 1 ? 'opens' : 'open'} in an outside tool (like McGraw Hill Connect or Gradescope) that this cannot read. Open ${tools.length === 1 ? 'it' : 'them'} in Blackboard.`
+                : undefined;
+            })(),
+          ]),
           items: items.map((i) => ({
             content_id: i.id,
             title: i.title,
@@ -40,6 +51,7 @@ export function registerContentTools(server: McpServer, ctx: BBToolContext): voi
               size_bytes: a.sizeBytes ?? null,
               mime_type: a.mimeType ?? null,
             })),
+            links: i.links.map((l) => ({ url: l.url, label: l.label ?? null, kind: l.kind })),
             modified: i.modified,
             url: i.url ?? null,
           })),

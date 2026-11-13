@@ -9,10 +9,11 @@ export type BlackboardErrorCode =
   | 'ATTACHMENT_NOT_FOUND'
   | 'BROWSER_PROFILE_BUSY'
   | 'BROWSER_LAUNCH_FAILED'
+  | 'BROWSER_NOT_INSTALLED'
   | 'INVALID_INPUT';
 
 /** Canonical message required by the project spec. */
-export const SESSION_EXPIRED_MESSAGE = 'Blackboard session expired. Run npm run login again.';
+export const SESSION_EXPIRED_MESSAGE = 'The Blackboard sign-in has expired.';
 
 /**
  * Redact anything that looks like a token/cookie/header value before it can
@@ -44,10 +45,17 @@ export class BlackboardError extends Error {
     );
   }
 
+  static unreachable(): BlackboardError {
+    return new BlackboardError(
+      'BLACKBOARD_REQUEST_FAILED',
+      "Can't reach Blackboard right now. Check your internet connection (campus Wi-Fi sometimes needs you to sign in to it first), then try again.",
+    );
+  }
+
   static notLoggedIn(detail?: string): BlackboardError {
     return new BlackboardError(
       'NOT_LOGGED_IN',
-      detail ?? 'No Blackboard session found. Run npm run login first.',
+      detail ?? 'Not signed in to Blackboard yet.',
     );
   }
 }

@@ -8,11 +8,12 @@ import { BlackboardSession } from '../blackboard/session.js';
 import { isBlackboardError } from '../blackboard/errors.js';
 import { hasSession, paths, writeMeta } from '../storage/session-store.js';
 import {
+  BROWSER_NAMES,
   IS_WINDOWS,
-  chromeInstallCandidates,
   claudeDesktopConfigPath,
   findExecutable,
-  isChromeInstalled,
+  installedBrowsers,
+  isBrowserInstalled,
   localTscScript,
   quitAppHint,
   runCommand,
@@ -38,23 +39,44 @@ function projectRoot(): string {
 
 function checkNode(): boolean {
   const major = Number(process.versions.node.split('.')[0]);
-  if (major >= 20) {
+  // 22, not 20: the PDF reader needs it, and on older Node every PDF would
+  // quietly come back "unreadable". Node 20 stopped getting updates in 2026.
+  if (major >= 22) {
     ok(`Node.js v${process.versions.node}`);
     return true;
   }
-  warn(`Node.js v${process.versions.node} is too old (20 or newer required).`);
+  warn(`Node.js v${process.versions.node} is too old (22 or newer required).`);
   console.log('       Download the LTS version from https://nodejs.org, then run setup again.');
   return false;
 }
 
-function checkChrome(): boolean {
-  if (isChromeInstalled()) {
-    ok('Google Chrome installed');
+/**
+ * A browser the tool can drive: Chrome or Edge if either is installed (every
+ * Windows PC has Edge), otherwise offer to download a private Chromium that
+ * only this tool uses — the usual case for a Safari-only Mac.
+ */
+async function checkBrowser(): Promise<boolean> {
+  const found = installedBrowsers();
+  if (found.length > 0) {
+    ok(`Browser: ${BROWSER_NAMES[found[0]!]}`);
     return true;
   }
-  warn('Google Chrome was not found.');
-  console.log('       Install it from https://www.google.com/chrome/ and run setup again.');
-  console.log(`       Looked in: ${chromeInstallCandidates().join(', ')}`);
+  warn('Neither Google Chrome nor Microsoft Edge is installed.');
+  console.log('       blackboard-mcp can download its own copy of Chromium (the open-source base of Chrome).');
+  console.log('       It is used only by this tool, never as your everyday browser. A 150 MB download (about 360 MB on disk), one time.');
+  if (!(await askYesNo('Download it now?'))) {
+    console.log('       Or install Google Chrome from https://www.google.com/chrome/, then run setup again.');
+    return false;
+  }
+  const cli = path.join(projectRoot(), 'node_modules', 'playwright', 'cli.js');
+  // --no-shell: the tool runs the full browser even when hidden, so the
+  // separate "headless shell" download would be wasted space.
+  const result = runCommand(process.execPath, [cli, 'install', '--no-shell', 'chromium'], { cwd: projectRoot(), stdio: 'inherit' });
+  if (result.status === 0 && isBrowserInstalled('chromium')) {
+    ok(`Browser: ${BROWSER_NAMES.chromium}`);
+    return true;
+  }
+  warn('The download did not finish. Check your internet connection and run setup again, or install Google Chrome.');
   return false;
 }
 
@@ -64,13 +86,15 @@ function checkBuilt(): boolean {
     ok('Project is built');
     return true;
   }
+  // The built files ship with the project, so this only happens in a copy
+  // that lost them; students get only the runtime packages, not the compiler.
   warn('Project is not built yet. Attempting to build (takes a moment)...');
   // Run the compiler that npm install already placed in node_modules. Going
   // through `npx` would mean spawning npx.cmd on Windows, which Node refuses
   // to execute directly.
   const tsc = localTscScript(projectRoot());
   if (!tsc) {
-    warn('Could not find the TypeScript compiler. Run `npm install`, then `npm run build`.');
+    warn('The project files look incomplete. Download the project again (or run `npm install`, then `npm run build`).');
     return false;
   }
   const result = runCommand(process.execPath, [tsc, '-p', 'tsconfig.json'], {
@@ -84,42 +108,81 @@ function checkBuilt(): boolean {
 }
 
 /**
- * How the AI app should invoke Node. Windows apps launched from the Start menu
- * often do not inherit the user's PATH, so a bare `node` there fails with
- * ENOENT; the absolute path to the interpreter running setup always works.
+ * How the AI app should invoke Node: always a full path. Apps opened from the
+ * Start menu or Finder do not get the Terminal's PATH, so a bare `node` fails
+ * whenever Node came from Homebrew or nvm — setup said "connected" and the
+ * tools never appeared. On a Mac the PATH entry is preferred over the running
+ * binary because Homebrew's /opt/homebrew/bin/node survives `brew upgrade`,
+ * while the versioned Cellar path behind it does not.
  */
 function nodeCommand(): string {
-  return IS_WINDOWS ? process.execPath : 'node';
+  if (IS_WINDOWS) return process.execPath;
+  return findExecutable('node') ?? process.execPath;
+}
+
+const serverScript = (): string => path.join(projectRoot(), 'dist', 'index.js');
+
+/** Whether the one-click Blackboard extension is already installed in Claude Desktop. */
+function hasBlackboardExtension(configDir: string): boolean {
+  try {
+    return fs.readdirSync(path.join(configDir, 'Claude Extensions')).some((name) => name.includes('blackboard-mcp'));
+  } catch {
+    return false;
+  }
 }
 
 function configureClaudeDesktop(): boolean {
   const configPath = claudeDesktopConfigPath();
   const configDir = path.dirname(configPath);
+  // Adding it here as well would make every Blackboard tool appear twice.
+  if (hasBlackboardExtension(configDir)) {
+    ok('Claude Desktop already has the Blackboard extension installed');
+    return true;
+  }
   const hasConfigFile = fs.existsSync(configPath);
   // The app's own folder is the reliable sign that it is installed. The config
   // file itself only appears once the student has opened Developer settings,
   // so a missing file is a normal first run, not a missing app.
   if (!hasConfigFile && !fs.existsSync(configDir)) {
-    console.log('  [ -- ] Claude Desktop not found (skipping). You can install it from https://claude.ai/download');
-    console.log(`         (looked for ${configDir})`);
+    console.log('  [ -- ] Claude Desktop not found (skipping).');
+    console.log('         If you have installed it: open Claude Desktop once, quit it, then run setup again.');
+    console.log('         Otherwise you can get it from https://claude.ai/download');
+    return false;
+  }
+  let config: { mcpServers?: Record<string, { command?: string; args?: string[] }> } & Record<string, unknown>;
+  try {
+    const raw = hasConfigFile ? fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '').trim() : '';
+    config = raw === '' ? {} : JSON.parse(raw);
+  } catch {
+    warn('Your Claude Desktop settings file has a typo in it, so setup left it alone.');
+    console.log('       In Claude Desktop open Settings > Developer > Edit Config and fix it, or follow the manual steps in the README.');
     return false;
   }
   try {
-    const raw = hasConfigFile ? fs.readFileSync(configPath, 'utf8').trim() : '';
-    const config = raw === '' ? {} : JSON.parse(raw);
-    const entry = JSON.stringify(config.mcpServers?.blackboard ?? null);
-    if (entry.includes('blackboard-mcp')) {
+    const existing = config.mcpServers?.blackboard;
+    // "Already connected" only counts if it points at THIS copy of the
+    // project and a Node that exists. An entry left over from an earlier
+    // clone in another folder launches nothing, and used to be accepted.
+    const pointsHere = existing?.args?.[0] === serverScript();
+    const nodeExists = typeof existing?.command === 'string' && path.isAbsolute(existing.command) && fs.existsSync(existing.command);
+    if (pointsHere && nodeExists) {
       ok('Claude Desktop already connected to blackboard-mcp');
       return true;
     }
     config.mcpServers = config.mcpServers || {};
     config.mcpServers.blackboard = {
       command: nodeCommand(),
-      args: [path.join(projectRoot(), 'dist', 'index.js')],
+      args: [serverScript()],
     };
     if (hasConfigFile) fs.copyFileSync(configPath, `${configPath}.bak-blackboard-setup`);
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-    ok(hasConfigFile ? 'Claude Desktop connected (backup saved next to the config)' : 'Claude Desktop connected (new config file created)');
+    ok(
+      existing
+        ? 'Claude Desktop connection updated to this folder (backup saved next to the config)'
+        : hasConfigFile
+          ? 'Claude Desktop connected (backup saved next to the config)'
+          : 'Claude Desktop connected (new config file created)',
+    );
     console.log(`       ${quitAppHint()} and reopen it to see the tools.`);
     return true;
   } catch (err) {
@@ -135,23 +198,22 @@ function configureClaudeCode(): boolean {
     console.log('  [ -- ] Claude Code not found (skipping).');
     return false;
   }
-  const result = runCommand(claude, [
-    'mcp',
-    'add',
-    'blackboard',
-    '--',
-    nodeCommand(),
-    path.join(projectRoot(), 'dist', 'index.js'),
-  ]);
+  // User scope, so it works from any folder: the default scope is the
+  // current folder only, and setup runs from the project folder, so `claude`
+  // started anywhere else showed no Blackboard tools.
+  const add = (): ReturnType<typeof runCommand> =>
+    runCommand(claude, ['mcp', 'add', '--scope', 'user', 'blackboard', '--', nodeCommand(), serverScript()]);
+  let result = add();
+  let output = result.stderr || result.stdout || '';
+  if (result.status !== 0 && /already exists/i.test(output)) {
+    // An old entry may point at a folder that no longer exists; replace it
+    // rather than trusting it.
+    runCommand(claude, ['mcp', 'remove', '--scope', 'user', 'blackboard']);
+    result = add();
+    output = result.stderr || result.stdout || '';
+  }
   if (result.status === 0) {
     ok('Claude Code connected (run: claude, then type /mcp to confirm)');
-    return true;
-  }
-  const output = result.stderr || result.stdout || '';
-  // `claude mcp add` refuses to overwrite an existing server, which means the
-  // job is already done rather than failed.
-  if (/already exists/i.test(output)) {
-    ok('Claude Code already connected to blackboard-mcp');
     return true;
   }
   warn(`Could not add to Claude Code: ${output.slice(0, 120)}`);
@@ -174,9 +236,9 @@ async function checkSession(): Promise<boolean> {
 }
 
 async function runLogin(): Promise<boolean> {
-  console.log('\n  Opening a Chrome window for you to sign in.');
+  console.log('\n  Opening a browser window for you to sign in.');
   console.log('  Use the window with the RED BANNER. Sign in with your TCD account and approve MFA.');
-  console.log('  This tool never sees or stores your password or Duo codes.');
+  console.log('  This tool never sees or stores your password or MFA codes.');
   const session = await BlackboardSession.acquire({ headless: false });
   try {
     await session.focusLoginWindow();
@@ -212,7 +274,7 @@ async function main(): Promise<number> {
   console.log('');
 
   console.log('Step 1 of 4: dependencies');
-  const depsOk = checkNode() && checkChrome() && checkBuilt();
+  const depsOk = checkNode() && (await checkBrowser()) && checkBuilt();
 
   console.log('\nStep 2 of 4: connecting your AI assistant');
   if (await askYesNo('Connect Claude Desktop automatically?')) configureClaudeDesktop();
@@ -220,19 +282,22 @@ async function main(): Promise<number> {
 
   console.log('\nStep 3 of 4: your Blackboard session');
   let active = false;
+  let busy = false;
   if (await hasSession()) {
     try {
       active = await checkSession();
     } catch (err) {
       if (isBlackboardError(err) && err.code === 'BROWSER_PROFILE_BUSY') {
-        warn('Another blackboard-mcp process is running. Close it, then answer the login step with no and run setup again.');
+        busy = true;
+        warn('Your AI app is using Blackboard right now, so setup cannot check your login.');
+        console.log(`       ${quitAppHint().replace('Quit it', 'Quit Claude Desktop (and any claude session in a terminal)')}, then run setup again.`);
       }
       active = false;
     }
   } else {
     console.log('  [ -- ] No Blackboard session found (first time setup).');
   }
-  if (!active) {
+  if (!active && !busy) {
     if (await askYesNo('Open a browser to log in to Blackboard now?')) {
       active = await runLogin();
       if (active) {
@@ -255,7 +320,9 @@ async function main(): Promise<number> {
     rl.close();
     return 1;
   }
-  if (!active) {
+  if (busy) {
+    warn('Login could not be checked because the AI app was open. Quit it and run `npm run setup` again.');
+  } else if (!active) {
     warn('Login was not completed. Run `npm run setup` or `npm run login` before using the tools.');
   } else {
     ok('Everything is ready.');
@@ -272,7 +339,10 @@ async function main(): Promise<number> {
     ].join('\n'),
   );
   rl.close();
-  return active ? 0 : 1;
+  // Dependencies are fine and the student simply chose to log in later:
+  // exiting non-zero here made npm print a red "setup failed" block right
+  // under the friendly summary.
+  return 0;
 }
 
 main()

@@ -21,8 +21,19 @@ export const paths = {
   get home(): string {
     return blackboardHome();
   },
+  /** Chrome's profile (the original name, kept so existing sign-ins carry over). */
   get profileDir(): string {
     return path.join(blackboardHome(), 'chrome-profile');
+  },
+  /**
+   * One profile folder per browser. Chrome and Edge must never share one:
+   * each would try to upgrade the other's files in its own way.
+   */
+  profileDirFor(browser: string): string {
+    return path.join(blackboardHome(), browser === 'chrome' ? 'chrome-profile' : `${browser.replace(/[^a-z0-9-]/gi, '')}-profile`);
+  },
+  get allProfileDirs(): string[] {
+    return ['chrome', 'msedge', 'chromium'].map((b) => this.profileDirFor(b));
   },
   get downloadsDir(): string {
     // Downloads can live somewhere visible (e.g. a course folder) without
@@ -48,12 +59,14 @@ export async function ensureDirs(): Promise<void> {
 }
 
 export async function hasProfileData(): Promise<boolean> {
-  try {
-    const entries = await fs.readdir(paths.profileDir);
-    return entries.length > 0;
-  } catch {
-    return false;
+  for (const dir of paths.allProfileDirs) {
+    try {
+      if ((await fs.readdir(dir)).length > 0) return true;
+    } catch {
+      /* not created */
+    }
   }
+  return false;
 }
 
 export interface SessionMeta {
@@ -63,6 +76,16 @@ export interface SessionMeta {
   userName?: string;
   /** Origin (e.g. "https://blackboard.syracuse.edu") that holds the session. */
   authOrigin?: string;
+  /** Sites signed into with `npm run connect`, whose cookies are kept too. */
+  connectedSites?: string[];
+  /** Which browser this machine was set up with (chrome, msedge, chromium). */
+  browser?: string;
+}
+
+/** Sites the student signed into with `npm run connect` (e.g. "zoom.us"). */
+export async function connectedSites(): Promise<string[]> {
+  const meta = await readMeta().catch(() => ({}) as SessionMeta);
+  return Array.isArray(meta.connectedSites) ? meta.connectedSites : [];
 }
 
 export async function readMeta(): Promise<SessionMeta> {
@@ -105,7 +128,20 @@ export interface StoredCookie {
 export async function saveCookies(cookies: StoredCookie[]): Promise<void> {
   await ensureDirs();
   const payload = JSON.stringify({ savedAt: new Date().toISOString(), cookies }, null, 2);
-  await fs.writeFile(paths.browserStateFile, payload, { encoding: 'utf8', mode: 0o600 });
+  // Write-then-rename: a crash mid-write must not leave half a file behind,
+  // which would read as "no cookies" and quietly sign the student out.
+  const tmp = `${paths.browserStateFile}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  await fs.writeFile(tmp, payload, { encoding: 'utf8', mode: 0o600 });
+  try {
+    await fs.rename(tmp, paths.browserStateFile);
+  } catch (err) {
+    // Windows refuses the rename while another process has the file open;
+    // do not leave a stray copy of the cookies behind.
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
+  // The mode above only applies when a file is created; tighten an older one too.
+  await fs.chmod(paths.browserStateFile, 0o600).catch(() => undefined);
 }
 
 export async function loadCookies(): Promise<StoredCookie[]> {
@@ -136,9 +172,41 @@ export async function hasSession(): Promise<boolean> {
   return hasStoredCookies();
 }
 
-/** Wipes the dedicated browser profile (logout). Requires no active browser. */
+/**
+ * Whether a Chrome is using the profile right now (the AI app's server, or
+ * another npm run command). Chrome marks the profile with a SingletonLock
+ * link naming "host-pid"; a lock left by a crashed Chrome names a dead pid.
+ */
+export async function isProfileInUse(): Promise<boolean> {
+  for (const dir of paths.allProfileDirs) {
+    if (await isDirInUse(dir)) return true;
+  }
+  return false;
+}
+
+async function isDirInUse(dir: string): Promise<boolean> {
+  try {
+    const target = await fs.readlink(path.join(dir, 'SingletonLock'));
+    const pid = Number(/-(\d+)$/.exec(target)?.[1]);
+    if (!pid) return true;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  } catch {
+    return false; // no lock (or Windows, which reports busy as EBUSY on delete)
+  }
+}
+
+/**
+ * Wipes the saved session (logout). The cookie snapshot goes first: it alone
+ * is enough to be signed in, so it must not survive a profile delete that
+ * fails half way (Windows refuses to delete files an open Chrome holds).
+ */
 export async function clearProfile(): Promise<void> {
-  await fs.rm(paths.profileDir, { recursive: true, force: true });
-  await fs.rm(paths.metaFile, { force: true });
   await fs.rm(paths.browserStateFile, { force: true });
+  await fs.rm(paths.metaFile, { force: true });
+  for (const dir of paths.allProfileDirs) await fs.rm(dir, { recursive: true, force: true });
 }

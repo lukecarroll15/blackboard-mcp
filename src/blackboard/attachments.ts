@@ -262,7 +262,32 @@ export async function downloadAttachmentRef(
   }
 
   const rawName = opts.fileName ?? ref.fileName ?? resp.filename ?? `attachment-${ref.contentId}`;
-  const fileName = sanitizeFileName(rawName);
+  const target = await uniqueTarget(dir, sanitizeFileName(rawName));
+  await fs.rename(partial, target);
+  return saveResult(target, resp.sizeBytes, resp.contentType ?? ref.mimeType, () => fs.readFile(target));
+}
+
+/**
+ * Write bytes already in memory (an outside link, capped well below the
+ * attachment limit) into the downloads folder under a safe, non-clashing name.
+ */
+export async function saveToDownloads(
+  bytes: Buffer,
+  rawName: string,
+  subfolder?: string,
+  mimeType?: string | null,
+): Promise<AttachmentSaveResult> {
+  const dir = subfolder
+    ? safeJoin(paths.downloadsDir, sanitizeFileName(subfolder))
+    : safeJoin(paths.downloadsDir);
+  await fs.mkdir(dir, { recursive: true });
+  const target = await uniqueTarget(dir, sanitizeFileName(rawName));
+  await fs.writeFile(target, bytes);
+  return saveResult(target, bytes.length, mimeType, async () => bytes);
+}
+
+/** A free path in dir. Existing files are never overwritten: a second copy gets "-1", "-2", ... */
+async function uniqueTarget(dir: string, fileName: string): Promise<string> {
   let target = safeJoin(dir, fileName);
   let counter = 1;
   while (true) {
@@ -271,21 +296,40 @@ export async function downloadAttachmentRef(
       target = safeJoin(dir, fileName.replace(/(\.[^.]*)?$/, `-${counter}$1`));
       counter += 1;
     } catch {
-      break;
+      return target;
     }
   }
-  await fs.rename(partial, target);
+}
 
+async function saveResult(
+  target: string,
+  sizeBytes: number,
+  mimeType: string | null | undefined,
+  read: () => Promise<Buffer>,
+): Promise<AttachmentSaveResult> {
   const result: AttachmentSaveResult = {
     path: target,
     fileName: path.basename(target),
-    sizeBytes: resp.sizeBytes,
-    mimeType: resp.contentType ?? ref.mimeType,
+    sizeBytes,
+    mimeType: mimeType ?? undefined,
   };
-  if (isTexty(result.fileName, result.mimeType) && resp.sizeBytes <= TEXT_EXCERPT_MAX_BYTES) {
-    result.textExcerpt = truncate(await fs.readFile(target, 'utf8'), TEXT_EXCERPT_CHARS);
+  if (isTexty(result.fileName, result.mimeType) && sizeBytes <= TEXT_EXCERPT_MAX_BYTES) {
+    result.textExcerpt = truncate((await read()).toString('utf8'), TEXT_EXCERPT_CHARS);
   }
   return result;
+}
+
+/**
+ * Ceiling on a saved file read back into memory for text extraction. Files
+ * stream to disk with no memory cost; only this read-back holds the bytes, so
+ * a long lecture recording is never loaded just to find it has no text.
+ */
+export const MAX_EXTRACT_BYTES = 200 * 1024 * 1024;
+
+/** The saved file's bytes for text extraction, or null when it is too large to read back. */
+export async function readSavedForExtraction(saved: AttachmentSaveResult): Promise<Buffer | null> {
+  if (saved.sizeBytes > MAX_EXTRACT_BYTES) return null;
+  return fs.readFile(saved.path);
 }
 
 export interface DownloadOptions {
